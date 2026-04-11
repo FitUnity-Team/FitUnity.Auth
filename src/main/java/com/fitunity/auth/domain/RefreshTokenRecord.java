@@ -6,6 +6,8 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+import jakarta.persistence.PrePersist;
+
 @Entity
 @Table(name = "refresh_token_records")
 @Data

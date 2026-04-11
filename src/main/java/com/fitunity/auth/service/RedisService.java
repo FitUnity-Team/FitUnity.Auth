@@ -113,12 +113,30 @@ public class RedisService {
         }
     }
 
+    public String getRoleOverrideFromRedis(String userId) {
+        try {
+            return redisTemplate.opsForValue().get("user_role:" + userId);
+        } catch (Exception e) {
+            log.warn("Redis get failed for user_role:{}", userId, e);
+            return null;
+        }
+    }
+
     // subscription status
     public void setSubscriptionStatus(String userId, String status, long ttlSeconds) {
         try {
             redisTemplate.opsForValue().set("user_sub:" + userId, status, ttlSeconds, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception e) {
             log.warn("Redis set failed for user_sub:{}, status={}", userId, status, e);
+        }
+    }
+
+    public String getSubscriptionStatus(String userId) {
+        try {
+            return redisTemplate.opsForValue().get("user_sub:" + userId);
+        } catch (Exception e) {
+            log.warn("Redis get failed for user_sub:{}", userId, e);
+            return null;
         }
     }
 }

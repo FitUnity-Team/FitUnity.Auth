@@ -27,13 +27,23 @@ public class RabbitMQConfig {
     }
 
     @Bean
-    public Binding authQueueBinding() {
+    public Binding authQueueBindingActivated() {
         return BindingBuilder.bind(authSubscriptionQueue())
                 .to(subscriptionExchange())
-                .with("subscription.activated")
-                .and(subscriptionExchange())
-                .with("subscription.expired")
-                .and(subscriptionExchange())
+                .with("subscription.activated");
+    }
+
+    @Bean
+    public Binding authQueueBindingExpired() {
+        return BindingBuilder.bind(authSubscriptionQueue())
+                .to(subscriptionExchange())
+                .with("subscription.expired");
+    }
+
+    @Bean
+    public Binding authQueueBindingCancelled() {
+        return BindingBuilder.bind(authSubscriptionQueue())
+                .to(subscriptionExchange())
                 .with("subscription.cancelled");
     }
 }

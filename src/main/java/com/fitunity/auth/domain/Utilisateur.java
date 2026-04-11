@@ -6,6 +6,9 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
+
 @Entity
 @Table(name = "utilisateurs", uniqueConstraints = {
     @UniqueConstraint(columnNames = "email")

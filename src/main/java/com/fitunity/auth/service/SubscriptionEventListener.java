@@ -1,12 +1,13 @@
 package com.fitunity.auth.service;
 
+import com.fitunity.auth.dto.SubscriptionEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
+import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 
 @Component
 public class SubscriptionEventListener {
@@ -28,10 +29,10 @@ public class SubscriptionEventListener {
             long ttlSeconds;
 
             if (event.expiresAt != null) {
-                ttlSeconds = ChronoUnit.SECONDS.between(LocalDateTime.now(), event.expiresAt);
+                ttlSeconds = Duration.between(LocalDateTime.now(), event.expiresAt).getSeconds();
                 if (ttlSeconds < 0) ttlSeconds = 0;
             } else {
-                ttlSeconds = ChronoUnit.DAYS.toSeconds(30); // 30 days default
+                ttlSeconds = Duration.ofDays(30).getSeconds(); // 30 days default
             }
 
             redisService.setSubscriptionStatus(event.userId, event.status, ttlSeconds);
