@@ -1,17 +1,11 @@
 package com.fitunity.auth.domain;
 
 import jakarta.persistence.*;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-import jakarta.persistence.PrePersist;
-
 @Entity
 @Table(name = "refresh_token_records")
-@Data
-@NoArgsConstructor
 public class RefreshTokenRecord {
 
     @Id
@@ -36,9 +30,59 @@ public class RefreshTokenRecord {
     @Column(name = "is_revoked", nullable = false)
     private boolean isRevoked;
 
-    @PrePersist
-    protected void onCreate() {
-        if (id == null) id = UUID.randomUUID();
-        createdAt = LocalDateTime.now();
+    public UUID getId() {
+        return id;
+    }
+
+    public void setId(UUID id) {
+        this.id = id;
+    }
+
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
+    public String getTokenFamilyId() {
+        return tokenFamilyId;
+    }
+
+    public void setTokenFamilyId(String tokenFamilyId) {
+        this.tokenFamilyId = tokenFamilyId;
+    }
+
+    public String getRefreshTokenHash() {
+        return refreshTokenHash;
+    }
+
+    public void setRefreshTokenHash(String refreshTokenHash) {
+        this.refreshTokenHash = refreshTokenHash;
+    }
+
+    public LocalDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(LocalDateTime expiresAt) {
+        this.expiresAt = expiresAt;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public boolean isRevoked() {
+        return isRevoked;
+    }
+
+    public void setRevoked(boolean revoked) {
+        isRevoked = revoked;
     }
 }

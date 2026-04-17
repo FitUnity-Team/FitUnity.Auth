@@ -2,10 +2,10 @@ package com.fitunity.auth.service;
 
 import com.fitunity.auth.domain.RefreshTokenRecord;
 import com.fitunity.auth.domain.Role;
-import com.fitunity.auth.domain.StatutAbonnement;
 import com.fitunity.auth.domain.Utilisateur;
 import com.fitunity.auth.dto.AuthResponse;
 import com.fitunity.auth.dto.LoginRequest;
+import com.fitunity.auth.dto.RefreshResponse;
 import com.fitunity.auth.dto.RegisterRequest;
 import com.fitunity.auth.exception.AccountDisabledException;
 import com.fitunity.auth.exception.EmailExistsException;
@@ -15,7 +15,16 @@ import com.fitunity.auth.exception.SessionExpiredException;
 import com.fitunity.auth.exception.TooManyAttemptsException;
 import com.fitunity.auth.repository.RefreshTokenRecordRepository;
 import com.fitunity.auth.repository.UtilisateurRepository;
-import jakarta.servlet.http.Cookie;
+import com.fitunity.auth.service.auth.AuthResponseMapper;
+import com.fitunity.auth.service.auth.RefreshCookieService;
+import com.fitunity.auth.service.auth.RefreshTokenManager;
+import com.fitunity.auth.service.auth.SubscriptionStatusResolver;
+import com.fitunity.auth.service.auth.UserFactory;
+import com.fitunity.auth.service.port.AuthFacade;
+import com.fitunity.auth.service.port.IdentityUserDetails;
+import com.fitunity.auth.service.port.RedisStore;
+import com.fitunity.auth.service.port.TokenProvider;
+import com.fitunity.auth.service.port.UserIdentityService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
@@ -24,418 +33,275 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
-import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
 @Service
-public class AuthService {
+public class AuthService implements AuthFacade {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+    private static final long ROLE_OVERRIDE_TTL_SECONDS = 300L;
 
     private final UtilisateurRepository utilisateurRepository;
     private final RefreshTokenRecordRepository refreshTokenRecordRepository;
     private final PasswordEncoder passwordEncoder;
-    private final TokenService tokenService;
-    private final RedisService redisService;
+    private final TokenProvider tokenProvider;
+    private final RedisStore redisStore;
+    private final UserIdentityService userIdentityService;
+    private final UserFactory userFactory;
+    private final RefreshTokenManager refreshTokenManager;
+    private final AuthResponseMapper authResponseMapper;
+    private final SubscriptionStatusResolver subscriptionStatusResolver;
+    private final RefreshCookieService refreshCookieService;
 
     public AuthService(
             UtilisateurRepository utilisateurRepository,
             RefreshTokenRecordRepository refreshTokenRecordRepository,
             PasswordEncoder passwordEncoder,
-            TokenService tokenService,
-            RedisService redisService
+            TokenProvider tokenProvider,
+            RedisStore redisStore,
+            UserIdentityService userIdentityService,
+            UserFactory userFactory,
+            RefreshTokenManager refreshTokenManager,
+            AuthResponseMapper authResponseMapper,
+            SubscriptionStatusResolver subscriptionStatusResolver,
+            RefreshCookieService refreshCookieService
     ) {
         this.utilisateurRepository = utilisateurRepository;
         this.refreshTokenRecordRepository = refreshTokenRecordRepository;
         this.passwordEncoder = passwordEncoder;
-        this.tokenService = tokenService;
-        this.redisService = redisService;
+        this.tokenProvider = tokenProvider;
+        this.redisStore = redisStore;
+        this.userIdentityService = userIdentityService;
+        this.userFactory = userFactory;
+        this.refreshTokenManager = refreshTokenManager;
+        this.authResponseMapper = authResponseMapper;
+        this.subscriptionStatusResolver = subscriptionStatusResolver;
+        this.refreshCookieService = refreshCookieService;
     }
 
-    /**
-     * Register a new user.
-     */
+    @Override
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
-        // Check if email already exists
-        if (utilisateurRepository.existsByEmail(request.getEmail())) {
+    public void register(RegisterRequest request) {
+        String normalizedEmail = userFactory.normalizeEmail(request.getEmail());
+        if (utilisateurRepository.existsByEmail(normalizedEmail)) {
             throw new EmailExistsException("Un utilisateur avec cet email existe déjà");
         }
 
-        // Create new user
-        Utilisateur utilisateur = new Utilisateur();
-        utilisateur.setEmail(request.getEmail());
-        utilisateur.setPasswordHash(passwordEncoder.encode(request.getPassword()));
-        utilisateur.setRole(Role.CLIENT);
+        Utilisateur utilisateur = userFactory.newClientUser(
+                normalizedEmail,
+                passwordEncoder.encode(request.getPassword()),
+                request.getNom()
+        );
+        utilisateurRepository.save(utilisateur);
 
-        // Save to database
-        utilisateur = utilisateurRepository.save(utilisateur);
-
-        log.info("New user registered: {}", utilisateur.getEmail());
-
-        // Generate tokens
-        return generateTokensAndResponse(utilisateur, null);
+        log.info("New user registered: {}", normalizedEmail);
     }
 
-    /**
-     * Login user with email and password.
-     */
+    @Override
     @Transactional
     public AuthResponse login(LoginRequest request, HttpServletResponse response) {
-        // Check Redis for login attempts (throttling)
-        long attempts = redisService.getLoginAttempts(request.getEmail());
+        String normalizedEmail = userFactory.normalizeEmail(request.getEmail());
+
+        long attempts = redisStore.getLoginAttempts(normalizedEmail);
         if (attempts >= 5) {
             throw new TooManyAttemptsException("Trop de tentatives de connexion. Veuillez réessayer dans 15 minutes.");
         }
 
-        // Find user by email
-        Utilisateur utilisateur = utilisateurRepository.findByEmail(request.getEmail())
-                .orElse(null);
-
+        Utilisateur utilisateur = utilisateurRepository.findByEmail(normalizedEmail).orElse(null);
         if (utilisateur == null) {
-            redisService.incrementLoginAttempts(request.getEmail());
+            redisStore.incrementLoginAttempts(normalizedEmail);
             throw new InvalidCredentialsException("Email ou mot de passe incorrect");
         }
 
-        // Verify password
         if (!passwordEncoder.matches(request.getPassword(), utilisateur.getPasswordHash())) {
-            redisService.incrementLoginAttempts(request.getEmail());
+            redisStore.incrementLoginAttempts(normalizedEmail);
             throw new InvalidCredentialsException("Email ou mot de passe incorrect");
         }
 
-        // Check if account is active (note: Utilisateur entity doesn't have 'active' field yet)
-        // For now, all users are considered active
+        if (!utilisateur.isActive()) {
+            throw new AccountDisabledException("Compte désactivé");
+        }
 
-        // Clear login attempts on success
-        redisService.clearLoginAttempts(request.getEmail());
+        redisStore.clearLoginAttempts(normalizedEmail);
 
-        // Get subscription status from Redis (maintained by Payment Service via RabbitMQ)
-        StatutAbonnement statutAbonnement = getSubscriptionStatus(utilisateur.getId().toString());
-
-        // Generate token family for this login session
+        String userId = utilisateur.getId().toString();
+        String statutAbonnement = getSubscriptionStatus(userId);
+        String accessToken = issueAccessToken(utilisateur, statutAbonnement);
+        String refreshToken = tokenProvider.generateRefreshToken();
+        String refreshTokenHash = refreshTokenManager.hash(refreshToken);
         String tokenFamily = UUID.randomUUID().toString();
 
-        // Generate access token for response
-        String accessToken = tokenService.generateAccessToken(
-                utilisateur.getId().toString(),
-                utilisateur.getEmail(),
-                utilisateur.getRole().name(),
-                statutAbonnement
-        );
+        refreshTokenManager.persist(userId, tokenFamily, refreshTokenHash, tokenProvider.getRefreshTokenExpiryDate());
+        redisStore.setRefreshTokenHash(userId, refreshTokenHash, tokenProvider.getRefreshTokenInactivityTtlSeconds());
+        redisStore.addSession(userId, tokenProvider.extractJti(accessToken));
+        refreshCookieService.setRefreshTokenCookie(response, refreshToken);
 
-        // Generate refresh token
-        String refreshToken = tokenService.generateRefreshToken();
-
-        // Hash refresh token for storage
-        String refreshTokenHash = hashRefreshToken(refreshToken);
-
-        // Store refresh token in MySQL
-        RefreshTokenRecord record = new RefreshTokenRecord();
-        record.setUserId(utilisateur.getId().toString());
-        record.setTokenFamilyId(tokenFamily);
-        record.setRefreshTokenHash(refreshTokenHash);
-        record.setExpiresAt(tokenService.getRefreshTokenExpiryDate());
-        record.setRevoked(false);
-        refreshTokenRecordRepository.save(record);
-
-        // Store in Redis for sliding window (7 days inactivity expiry)
-        redisService.setRefreshTokenHash(
-                utilisateur.getId().toString(),
-                refreshTokenHash,
-                tokenService.getRefreshTokenInactivityTtlSeconds()
-        );
-
-        // Add session to Redis
-        String jti = tokenService.extractJti(accessToken);
-        redisService.addSession(utilisateur.getId().toString(), jti);
-
-        // Set HttpOnly cookie with raw refresh token
-        setRefreshTokenCookie(response, refreshToken);
-
-        log.info("User logged in: {}", utilisateur.getEmail());
-
-        // Build response
-        AuthResponse authResponse = new AuthResponse();
-        authResponse.setAccessToken(accessToken);
-        authResponse.setUserId(utilisateur.getId().toString());
-        authResponse.setEmail(utilisateur.getEmail());
-        authResponse.setRole(utilisateur.getRole().name());
-        authResponse.setStatutAbonnement(statutAbonnement.name());
-
-        return authResponse;
+        return authResponseMapper.toLoginResponse(accessToken, utilisateur, statutAbonnement);
     }
 
-    /**
-     * Refresh access token using refresh token from cookie.
-     */
+    @Override
     @Transactional
-    public AuthResponse refresh(HttpServletRequest request, HttpServletResponse response) {
-        // Get refresh token from cookie
-        String rawRefreshToken = getRefreshTokenFromCookie(request);
-        if (rawRefreshToken == null) {
+    public RefreshResponse refresh(HttpServletRequest request, HttpServletResponse response) {
+        String rawRefreshToken = refreshCookieService.getRefreshTokenFromCookie(request);
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
             throw new InvalidCredentialsException("Refresh token manquant");
         }
 
-        // Hash the token
-        String refreshTokenHash = hashRefreshToken(rawRefreshToken);
+        String incomingHash = refreshTokenManager.hash(rawRefreshToken);
+        RefreshTokenRecord record = refreshTokenManager.findByHash(incomingHash)
+                .orElseThrow(() -> new InvalidCredentialsException("Refresh token invalide"));
 
-        // Find token record in MySQL
-        List<RefreshTokenRecord> records = refreshTokenRecordRepository.findValidRefreshTokens(
-                null, // We'll filter by hash manually
-                LocalDateTime.now()
-        );
-
-        RefreshTokenRecord record = null;
-        for (RefreshTokenRecord r : records) {
-            if (r.getRefreshTokenHash().equals(refreshTokenHash)) {
-                record = r;
-                break;
-            }
-        }
-
-        if (record == null) {
-            throw new InvalidCredentialsException("Refresh token invalide");
-        }
-
-        // Check if token is revoked (REPLAY ATTACK DETECTION)
         if (record.isRevoked()) {
             handleReplayAttack(record, request);
             throw new ReplayAttackException("Session compromise détectée");
         }
 
-        // Check Redis for sliding window
-        String storedHash = redisService.getRefreshTokenHash(record.getUserId());
-        if (storedHash == null || !storedHash.equals(refreshTokenHash)) {
-            throw new InvalidCredentialsException("Session expirée par inactivité");
+        if (record.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new SessionExpiredException("Session expirée");
         }
 
-        // Get user
+        String redisHash = redisStore.getRefreshTokenHash(record.getUserId());
+        if (redisHash == null) {
+            throw new SessionExpiredException("Session expirée");
+        }
+        if (!refreshTokenManager.secureEquals(incomingHash, redisHash)) {
+            throw new InvalidCredentialsException("Refresh token invalide");
+        }
+
         Utilisateur utilisateur = utilisateurRepository.findById(UUID.fromString(record.getUserId()))
                 .orElseThrow(() -> new InvalidCredentialsException("Utilisateur non trouvé"));
+        if (!utilisateur.isActive()) {
+            throw new AccountDisabledException("Compte désactivé");
+        }
 
-        // Get subscription status
-        StatutAbonnement statutAbonnement = getSubscriptionStatus(utilisateur.getId().toString());
+        String userId = utilisateur.getId().toString();
+        blacklistIfAccessTokenPresent(request, userId);
 
-        // Calculate remaining TTL of current access token (for blacklist)
-        String oldJti = null;
-        // Note: We don't have the old access token here, so we can't blacklist it
-        // In a full implementation, you'd pass the old access token in the request header
+        String newRawRefreshToken = tokenProvider.generateRefreshToken();
+        String newRefreshHash = refreshTokenManager.hash(newRawRefreshToken);
+        String statutAbonnement = getSubscriptionStatus(userId);
+        String newAccessToken = issueAccessToken(utilisateur, statutAbonnement);
 
-        // Generate new refresh token
-        String newRefreshToken = tokenService.generateRefreshToken();
-        String newRefreshTokenHash = hashRefreshToken(newRefreshToken);
+        refreshTokenManager.rotate(record, newRefreshHash);
 
-        // Invalidate old record
-        record.setRevoked(true);
-        refreshTokenRecordRepository.save(record);
+        redisStore.deleteRefreshToken(userId);
+        redisStore.setRefreshTokenHash(userId, newRefreshHash, tokenProvider.getRefreshTokenInactivityTtlSeconds());
+        redisStore.addSession(userId, tokenProvider.extractJti(newAccessToken));
+        refreshCookieService.setRefreshTokenCookie(response, newRawRefreshToken);
 
-        // Create new record with same token family
-        RefreshTokenRecord newRecord = new RefreshTokenRecord();
-        newRecord.setUserId(record.getUserId());
-        newRecord.setTokenFamilyId(record.getTokenFamilyId());
-        newRecord.setRefreshTokenHash(newRefreshTokenHash);
-        newRecord.setExpiresAt(record.getExpiresAt()); // Original expiry, NOT extended
-        newRecord.setRevoked(false);
-        refreshTokenRecordRepository.save(newRecord);
-
-        // Update Redis - reset sliding window
-        redisService.setRefreshTokenHash(
-                record.getUserId(),
-                newRefreshTokenHash,
-                tokenService.getRefreshTokenInactivityTtlSeconds()
-        );
-
-        // Generate new access token
-        String newJti = UUID.randomUUID().toString();
-        String newAccessToken = tokenService.generateAccessToken(
-                utilisateur.getId().toString(),
-                utilisateur.getEmail(),
-                utilisateur.getRole().name(),
-                statutAbonnement
-        );
-
-        // Add new session to Redis
-        redisService.addSession(utilisateur.getId().toString(), newJti);
-
-        // Set new cookie
-        setRefreshTokenCookie(response, newRefreshToken);
-
-        log.info("Token refreshed for user: {}", utilisateur.getEmail());
-
-        AuthResponse authResponse = new AuthResponse();
-        authResponse.setAccessToken(newAccessToken);
-        return authResponse;
+        return new RefreshResponse(newAccessToken);
     }
 
-    /**
-     * Logout user - blacklist token and revoke refresh tokens.
-     */
+    @Override
     @Transactional
     public void logout(String accessToken, HttpServletRequest request, HttpServletResponse response) {
-        // Extract JTI and userId from token
-        String jti = tokenService.extractJti(accessToken);
-        String userId = tokenService.extractUserId(accessToken);
+        String userId = tokenProvider.extractUserId(accessToken);
+        String jti = tokenProvider.extractJti(accessToken);
 
-        if (jti != null && userId != null) {
-            // Calculate remaining TTL and blacklist
-            long remainingTtl = tokenService.calculateRemainingTtlSeconds(accessToken);
-            redisService.blacklistToken(jti, remainingTtl);
-
-            // Remove session from Redis
-            redisService.removeSession(userId, jti);
+        if (jti != null) {
+            redisStore.blacklistToken(jti, tokenProvider.calculateRemainingTtlSeconds(accessToken));
+        }
+        if (userId != null && jti != null) {
+            redisStore.removeSession(userId, jti);
         }
 
-        // Get refresh token from cookie and revoke
-        String rawRefreshToken = getRefreshTokenFromCookie(request);
+        String rawRefreshToken = refreshCookieService.getRefreshTokenFromCookie(request);
         if (rawRefreshToken != null) {
-            String refreshTokenHash = hashRefreshToken(rawRefreshToken);
-
-            // Find and revoke all tokens in the same family
-            List<RefreshTokenRecord> records = refreshTokenRecordRepository.findValidRefreshTokens(
-                    userId,
-                    LocalDateTime.now()
-            );
-
-            for (RefreshTokenRecord record : records) {
-                if (record.getRefreshTokenHash().equals(refreshTokenHash)) {
-                    // Found the token - revoke entire family
-                    List<RefreshTokenRecord> familyTokens = refreshTokenRecordRepository.findActiveTokensByFamily(
-                            record.getTokenFamilyId()
-                    );
-                    for (RefreshTokenRecord familyToken : familyTokens) {
-                        familyToken.setRevoked(true);
-                    }
-                    refreshTokenRecordRepository.saveAll(familyTokens);
-
-                    // Remove from Redis
-                    redisService.deleteRefreshToken(userId);
-
-                    log.info("User logged out: {}", userId);
-                    break;
-                }
-            }
+            String refreshHash = refreshTokenManager.hash(rawRefreshToken);
+            refreshTokenManager.revokeFamilyByRefreshHash(refreshHash);
         }
 
-        // Clear cookie
-        clearRefreshTokenCookie(response);
-    }
-
-    /**
-     * Get subscription status from Redis, default to NONE if not found.
-     */
-    private StatutAbonnement getSubscriptionStatus(String userId) {
-        try {
-            String status = redisService.getSubscriptionStatus(userId);
-            if (status != null) {
-                return StatutAbonnement.valueOf(status);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to get subscription status from Redis for user: {}", userId, e);
+        if (userId != null) {
+            redisStore.deleteRefreshToken(userId);
         }
-        return StatutAbonnement.NONE;
+        refreshCookieService.clearRefreshTokenCookie(response);
     }
 
-    /**
-     * Generate tokens and build auth response.
-     */
-    private AuthResponse generateTokensAndResponse(Utilisateur utilisateur, StatutAbonnement statutAbonnement) {
-        String accessToken = tokenService.generateAccessToken(
-                utilisateur.getId().toString(),
-                utilisateur.getEmail(),
-                utilisateur.getRole().name(),
-                statutAbonnement != null ? statutAbonnement : StatutAbonnement.NONE
-        );
-
-        AuthResponse response = new AuthResponse();
-        response.setAccessToken(accessToken);
-        response.setUserId(utilisateur.getId().toString());
-        response.setEmail(utilisateur.getEmail());
-        response.setRole(utilisateur.getRole().name());
-        response.setStatutAbonnement(statutAbonnement != null ? statutAbonnement.name() : StatutAbonnement.NONE.name());
-
-        return response;
+    @Override
+    @Transactional
+    public Utilisateur updateRole(String userId, Role role) {
+        Utilisateur user = utilisateurRepository.findById(UUID.fromString(userId))
+                .orElseThrow(() -> new InvalidCredentialsException("Utilisateur non trouvé"));
+        user.setRole(role);
+        user.setUpdatedAt(LocalDateTime.now());
+        Utilisateur saved = utilisateurRepository.save(user);
+        redisStore.setRoleOverride(userId, role.getValue(), ROLE_OVERRIDE_TTL_SECONDS);
+        return saved;
     }
 
-    /**
-     * Hash refresh token with SHA-256.
-     */
-    private String hashRefreshToken(String token) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(token.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 algorithm not available", e);
-        }
+    @Override
+    @Transactional
+    public Utilisateur activateUser(String userId) {
+        Utilisateur user = utilisateurRepository.findById(UUID.fromString(userId))
+                .orElseThrow(() -> new InvalidCredentialsException("Utilisateur non trouvé"));
+        user.setActive(true);
+        user.setUpdatedAt(LocalDateTime.now());
+        return utilisateurRepository.save(user);
     }
 
-    /**
-     * Set HttpOnly cookie with refresh token.
-     */
-    private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken) {
-        Cookie cookie = new Cookie("refreshToken", refreshToken);
-        cookie.setHttpOnly(true);
-        cookie.setSecure(true); // HTTPS only
-        cookie.setPath("/api/auth");
-        cookie.setMaxAge(2592000); // 30 days
-        // Note: SameSite=Strict requires Servlet 6.0 or manual header setting
-        response.addCookie(cookie);
-    }
+    @Override
+    @Transactional
+    public Utilisateur deactivateUser(String userId) {
+        Utilisateur user = utilisateurRepository.findById(UUID.fromString(userId))
+                .orElseThrow(() -> new InvalidCredentialsException("Utilisateur non trouvé"));
+        user.setActive(false);
+        user.setUpdatedAt(LocalDateTime.now());
+        utilisateurRepository.save(user);
 
-    /**
-     * Clear refresh token cookie.
-     */
-    private void clearRefreshTokenCookie(HttpServletResponse response) {
-        Cookie cookie = new Cookie("refreshToken", null);
-        cookie.setHttpOnly(true);
-        cookie.setSecure(true);
-        cookie.setPath("/api/auth");
-        cookie.setMaxAge(0);
-        response.addCookie(cookie);
-    }
-
-    /**
-     * Get refresh token from request cookies.
-     */
-    private String getRefreshTokenFromCookie(HttpServletRequest request) {
-        Cookie[] cookies = request.getCookies();
-        if (cookies != null) {
-            for (Cookie cookie : cookies) {
-                if ("refreshToken".equals(cookie.getName())) {
-                    return cookie.getValue();
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Handle replay attack detection - revoke entire token family.
-     */
-    private void handleReplayAttack(RefreshTokenRecord compromisedRecord, HttpServletRequest request) {
-        // Revoke all tokens in the same family
-        List<RefreshTokenRecord> familyTokens = refreshTokenRecordRepository.findActiveTokensByFamily(
-                compromisedRecord.getTokenFamilyId()
-        );
-        for (RefreshTokenRecord token : familyTokens) {
+        List<RefreshTokenRecord> tokens = refreshTokenRecordRepository.findActiveByUserId(userId);
+        for (RefreshTokenRecord token : tokens) {
             token.setRevoked(true);
         }
-        refreshTokenRecordRepository.saveAll(familyTokens);
+        refreshTokenRecordRepository.saveAll(tokens);
 
-        // Remove from Redis
-        redisService.deleteRefreshToken(compromisedRecord.getUserId());
+        redisStore.deleteRefreshToken(userId);
+        redisStore.deleteSessions(userId);
+        return user;
+    }
 
-        // Log the incident
-        log.warn("REPLAY ATTACK DETECTED - userId={}, tokenFamily={}, ip={}, timestamp={}",
-                compromisedRecord.getUserId(),
-                compromisedRecord.getTokenFamilyId(),
-                request.getRemoteAddr(),
-                LocalDateTime.now()
-        );
+    private void blacklistIfAccessTokenPresent(HttpServletRequest request, String userId) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return;
+        }
+
+        String oldAccessToken = authorization.substring(7);
+        if (!tokenProvider.validateToken(oldAccessToken)) {
+            return;
+        }
+
+        String oldJti = tokenProvider.extractJti(oldAccessToken);
+        if (oldJti == null) {
+            return;
+        }
+
+        redisStore.blacklistToken(oldJti, tokenProvider.calculateRemainingTtlSeconds(oldAccessToken));
+        redisStore.removeSession(userId, oldJti);
+    }
+
+    private String issueAccessToken(Utilisateur utilisateur, String statutAbonnement) {
+        IdentityUserDetails userDetails = userIdentityService.requireIdentity(utilisateur.getId().toString());
+        if (userDetails == null) {
+            throw new InvalidCredentialsException("Utilisateur non trouvé");
+        }
+        return tokenProvider.generateAccessToken(userDetails, statutAbonnement);
+    }
+
+    private String getSubscriptionStatus(String userId) {
+        try {
+            return subscriptionStatusResolver.normalize(redisStore.getSubscriptionStatus(userId));
+        } catch (Exception e) {
+            log.warn("Failed to fetch subscription status from Redis for userId={}", userId, e);
+            return "NONE";
+        }
+    }
+
+    private void handleReplayAttack(RefreshTokenRecord compromisedRecord, HttpServletRequest request) {
+        refreshTokenManager.revokeFamily(compromisedRecord.getTokenFamilyId());
+        redisStore.deleteRefreshToken(compromisedRecord.getUserId());
+        log.warn("Replay attack detected for userId={}, tokenFamily={}, ip={}",
+                compromisedRecord.getUserId(), compromisedRecord.getTokenFamilyId(), request.getRemoteAddr());
     }
 }
