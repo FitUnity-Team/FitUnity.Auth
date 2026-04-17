@@ -20,6 +20,12 @@
 | Baseline before SRP/OAuth refactor | N/A | N/A | N/A | No comparable baseline captured in this workspace snapshot |
 | Current mixed-load run (2026-04-17) | 49.34 | 12.3s | 0.00% | k6 reported high dropped iterations (`8645`), throughput/latency target not met |
 
+## Verification Summary
+
+- `./mvnw clean test`: PASS (`Tests run: 43, Failures: 0, Errors: 0`)
+- `./mvnw -q -DskipTests package`: PASS
+- `./load-test.sh`: Functional checks PASS, performance threshold FAIL (`p95=12.3s` vs target `<=500ms`)
+
 ## Observations
 
 - Functional correctness under load is stable (`http_req_failed=0.00%`).
