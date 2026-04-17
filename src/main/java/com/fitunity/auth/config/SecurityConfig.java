@@ -38,13 +38,16 @@ public class SecurityConfig {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .logout(AbstractHttpConfigurer::disable)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints - no authentication required
                 .requestMatchers(HttpMethod.POST, "/register").permitAll()
                 .requestMatchers(HttpMethod.POST, "/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/refresh").permitAll()
+                .requestMatchers(HttpMethod.GET, "/oauth2/authorize/google", "/oauth2/callback/google").permitAll()
                 .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
 
                 // Admin endpoints - require ADMIN role only
                 .requestMatchers(HttpMethod.GET, "/admin/**").hasRole("ADMIN")
@@ -60,16 +63,16 @@ public class SecurityConfig {
                 // Default: require authentication
                 .anyRequest().authenticated()
             )
-            .exceptionHandling(ex -> ex
+                .exceptionHandling(ex -> ex
                 .authenticationEntryPoint((request, response, authException) -> {
                     response.setStatus(401);
                     response.setContentType("application/json");
-                    response.getWriter().write("{\"error\": \"Unauthorized\", \"message\": \"Authentication required\"}");
+                    response.getWriter().write("{\"status\": 401, \"error\": \"AUTHENTICATION_REQUIRED\", \"message\": \"Authentication required\", \"timestamp\": \"" + java.time.OffsetDateTime.now() + "\"}");
                 })
                 .accessDeniedHandler((request, response, accessDeniedException) -> {
                     response.setStatus(403);
                     response.setContentType("application/json");
-                    response.getWriter().write("{\"error\": \"Forbidden\", \"message\": \"Insufficient privileges\"}");
+                    response.getWriter().write("{\"status\": 403, \"error\": \"ACCESS_DENIED\", \"message\": \"Insufficient privileges\", \"timestamp\": \"" + java.time.OffsetDateTime.now() + "\"}");
                 })
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
