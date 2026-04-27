@@ -3,6 +3,9 @@ package com.fitunity.auth.service;
 import com.fitunity.auth.domain.Role;
 import com.fitunity.auth.domain.Utilisateur;
 import com.fitunity.auth.repository.UtilisateurRepository;
+import com.fitunity.auth.service.port.IdentityUserDetails;
+import com.fitunity.auth.service.port.RedisStore;
+import com.fitunity.auth.service.port.UserIdentityService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.core.GrantedAuthority;
@@ -14,18 +17,19 @@ import java.util.Collection;
 import java.util.Collections;
 
 @Service
-public class JwtUserDetailsService {
+public class JwtUserDetailsService implements UserIdentityService {
 
     private static final Logger log = LoggerFactory.getLogger(JwtUserDetailsService.class);
 
     private final UtilisateurRepository utilisateurRepository;
-    private final RedisService redisService;
+    private final RedisStore redisStore;
 
-    public JwtUserDetailsService(UtilisateurRepository utilisateurRepository, RedisService redisService) {
+    public JwtUserDetailsService(UtilisateurRepository utilisateurRepository, RedisStore redisStore) {
         this.utilisateurRepository = utilisateurRepository;
-        this.redisService = redisService;
+        this.redisStore = redisStore;
     }
 
+    @Override
     public UserDetails loadUserByUserId(String userId) {
         try {
             Utilisateur utilisateur = utilisateurRepository.findById(java.util.UUID.fromString(userId)).orElse(null);
@@ -36,10 +40,15 @@ public class JwtUserDetailsService {
             }
 
             // Check for role override in Redis (for admin role changes)
-            String roleOverride = redisService.getRoleOverrideFromRedis(userId);
+            String roleOverride = redisStore.getRoleOverrideFromRedis(userId);
             Role effectiveRole = roleOverride != null
-                    ? Role.valueOf(roleOverride)
+                    ? Role.fromValue(roleOverride)
                     : utilisateur.getRole();
+
+            if (!utilisateur.isActive()) {
+                log.warn("Inactive user cannot be loaded for authentication: {}", userId);
+                return null;
+            }
 
             return new JwtUserDetails(
                     utilisateur.getId().toString(),
@@ -56,7 +65,7 @@ public class JwtUserDetailsService {
      * Internal class representing user details for Spring Security.
      * Does not include password - used for JWT-authenticated requests.
      */
-    private static class JwtUserDetails implements UserDetails {
+    public static class JwtUserDetails implements IdentityUserDetails {
 
         private final String userId;
         private final String email;

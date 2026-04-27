@@ -1,7 +1,7 @@
 package com.fitunity.auth.filter;
 
-import com.fitunity.auth.service.JwtUserDetailsService;
-import com.fitunity.auth.service.TokenService;
+import com.fitunity.auth.service.port.TokenProvider;
+import com.fitunity.auth.service.port.UserIdentityService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -23,12 +23,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
-    private final TokenService tokenService;
-    private final JwtUserDetailsService userDetailsService;
+    private final TokenProvider tokenProvider;
+    private final UserIdentityService userIdentityService;
 
-    public JwtAuthenticationFilter(TokenService tokenService, JwtUserDetailsService userDetailsService) {
-        this.tokenService = tokenService;
-        this.userDetailsService = userDetailsService;
+    public JwtAuthenticationFilter(TokenProvider tokenProvider, UserIdentityService userIdentityService) {
+        this.tokenProvider = tokenProvider;
+        this.userIdentityService = userIdentityService;
     }
 
     @Override
@@ -40,16 +40,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             if (StringUtils.hasText(jwt)) {
                 // Check if token is blacklisted
-                if (tokenService.isTokenBlacklisted(jwt)) {
+                if (tokenProvider.isTokenBlacklisted(jwt)) {
                     log.debug("Token is blacklisted - rejecting request");
                     filterChain.doFilter(request, response);
                     return;
                 }
 
                 // Validate token and extract user details
-                if (tokenService.validateToken(jwt)) {
-                    String userId = tokenService.extractUserId(jwt);
-                    UserDetails userDetails = userDetailsService.loadUserByUserId(userId);
+                if (tokenProvider.validateToken(jwt)) {
+                    String userId = tokenProvider.extractUserId(jwt);
+                    UserDetails userDetails = userIdentityService.loadUserByUserId(userId);
 
                     if (userDetails != null) {
                         UsernamePasswordAuthenticationToken authentication =

@@ -19,12 +19,18 @@
 |---|---:|---:|---:|---|
 | Baseline before SRP/OAuth refactor | N/A | N/A | N/A | No comparable baseline captured in this workspace snapshot |
 | Current mixed-load run (2026-04-17) | 49.34 | 12.3s | 0.00% | k6 reported high dropped iterations (`8645`), throughput/latency target not met |
+| Final mixed-load verification (2026-04-17) | 49.88 | 14.06s | 0.00% | Threshold failed (`p95<=500ms`), high dropped iterations (`8579`) |
 
 ## Verification Summary
 
 - `./mvnw clean test`: PASS (`Tests run: 43, Failures: 0, Errors: 0`)
 - `./mvnw -q -DskipTests package`: PASS
-- `./load-test.sh`: Functional checks PASS, performance threshold FAIL (`p95=12.3s` vs target `<=500ms`)
+- `./load-test.sh`: Functional checks PASS, performance threshold FAIL (`p95=14.06s` vs target `<=500ms`)
+
+## Task 6 Status
+
+- Steps executed: full test suite, package verification, final mixed-load run, and docs update.
+- Acceptance result: NOT MET for performance SLA (`~49.88 req/s`, `p95=14.06s`, target `~200 req/s` and `p95<=500ms`).
 
 ## Observations
 

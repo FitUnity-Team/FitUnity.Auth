@@ -1,5 +1,6 @@
 package com.fitunity.auth.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 
@@ -10,6 +11,7 @@ public class LoginRequest {
     private String email;
 
     @NotBlank(message = "Mot de passe est requis")
+    @JsonProperty("motDePasse")
     private String password;
 
     public String getEmail() {

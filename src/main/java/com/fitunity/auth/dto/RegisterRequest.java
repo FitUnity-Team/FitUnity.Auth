@@ -1,5 +1,6 @@
 package com.fitunity.auth.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -12,7 +13,11 @@ public class RegisterRequest {
 
     @NotBlank(message = "Mot de passe est requis")
     @Size(min = 8, message = "Le mot de passe doit contenir au moins 8 caractères")
+    @JsonProperty("motDePasse")
     private String password;
+
+    @NotBlank(message = "Nom est requis")
+    private String nom;
 
     public String getEmail() {
         return email;
@@ -28,5 +33,13 @@ public class RegisterRequest {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getNom() {
+        return nom;
+    }
+
+    public void setNom(String nom) {
+        this.nom = nom;
     }
 }

@@ -1,28 +1,25 @@
 package com.fitunity.auth.service;
 
+import com.fitunity.auth.service.port.RedisStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import java.time.Duration;
-import java.time.LocalDateTime;
 
 @Service
-public class RedisService {
+public class RedisService implements RedisStore {
 
     private static final Logger log = LoggerFactory.getLogger(RedisService.class);
 
     private final RedisTemplate<String, String> redisTemplate;
-
-    @Value("${cookie.ttl.seconds:2592000}")
-    private long defaultCookieTtl;
 
     public RedisService(RedisTemplate<String, String> redisTemplate) {
         this.redisTemplate = redisTemplate;
     }
 
     // token operations
+    @Override
     public String getRefreshTokenHash(String userId) {
         try {
             return redisTemplate.opsForValue().get("refresh:" + userId);
@@ -32,6 +29,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public void setRefreshTokenHash(String userId, String hash, long ttlSeconds) {
         try {
             redisTemplate.opsForValue().set("refresh:" + userId, hash, ttlSeconds, java.util.concurrent.TimeUnit.SECONDS);
@@ -40,6 +38,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public void deleteRefreshToken(String userId) {
         try {
             redisTemplate.delete("refresh:" + userId);
@@ -49,6 +48,7 @@ public class RedisService {
     }
 
     // login attempts
+    @Override
     public long incrementLoginAttempts(String email) {
         try {
             Long count = redisTemplate.opsForValue().increment("login_attempts:" + email);
@@ -60,6 +60,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public long getLoginAttempts(String email) {
         try {
             String val = redisTemplate.opsForValue().get("login_attempts:" + email);
@@ -70,6 +71,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public void clearLoginAttempts(String email) {
         try {
             redisTemplate.delete("login_attempts:" + email);
@@ -79,6 +81,7 @@ public class RedisService {
     }
 
     // sessions
+    @Override
     public void addSession(String userId, String jti) {
         try {
             redisTemplate.opsForSet().add("sessions:" + userId, jti);
@@ -87,6 +90,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public void removeSession(String userId, String jti) {
         try {
             redisTemplate.opsForSet().remove("sessions:" + userId, jti);
@@ -95,7 +99,17 @@ public class RedisService {
         }
     }
 
+    @Override
+    public void deleteSessions(String userId) {
+        try {
+            redisTemplate.delete("sessions:" + userId);
+        } catch (Exception e) {
+            log.warn("Redis DEL failed for sessions:{}", userId, e);
+        }
+    }
+
     // blacklist
+    @Override
     public void blacklistToken(String jti, long ttlSeconds) {
         try {
             redisTemplate.opsForValue().set("blacklist:" + jti, "1", ttlSeconds, java.util.concurrent.TimeUnit.SECONDS);
@@ -105,6 +119,7 @@ public class RedisService {
     }
 
     // role override
+    @Override
     public void setRoleOverride(String userId, String role, long ttlSeconds) {
         try {
             redisTemplate.opsForValue().set("user_role:" + userId, role, ttlSeconds, java.util.concurrent.TimeUnit.SECONDS);
@@ -113,6 +128,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public String getRoleOverrideFromRedis(String userId) {
         try {
             return redisTemplate.opsForValue().get("user_role:" + userId);
@@ -123,6 +139,7 @@ public class RedisService {
     }
 
     // subscription status
+    @Override
     public void setSubscriptionStatus(String userId, String status, long ttlSeconds) {
         try {
             redisTemplate.opsForValue().set("user_sub:" + userId, status, ttlSeconds, java.util.concurrent.TimeUnit.SECONDS);
@@ -131,6 +148,7 @@ public class RedisService {
         }
     }
 
+    @Override
     public String getSubscriptionStatus(String userId) {
         try {
             return redisTemplate.opsForValue().get("user_sub:" + userId);

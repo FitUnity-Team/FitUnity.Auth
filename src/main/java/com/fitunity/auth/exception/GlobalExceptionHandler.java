@@ -11,7 +11,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
@@ -98,11 +98,10 @@ public class GlobalExceptionHandler {
             String errorCode
     ) {
         Map<String, Object> error = new HashMap<>();
-        error.put("error", status.getReasonPhrase());
-        error.put("message", message);
-        error.put("code", errorCode);
-        error.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         error.put("status", status.value());
+        error.put("error", errorCode);
+        error.put("message", message);
+        error.put("timestamp", OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         return ResponseEntity.status(status).body(error);
     }
 }

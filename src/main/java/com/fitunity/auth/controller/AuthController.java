@@ -2,8 +2,9 @@ package com.fitunity.auth.controller;
 
 import com.fitunity.auth.dto.AuthResponse;
 import com.fitunity.auth.dto.LoginRequest;
+import com.fitunity.auth.dto.RefreshResponse;
 import com.fitunity.auth.dto.RegisterRequest;
-import com.fitunity.auth.service.AuthService;
+import com.fitunity.auth.service.port.AuthFacade;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -13,29 +14,28 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping
 public class AuthController {
 
     private static final Logger log = LoggerFactory.getLogger(AuthController.class);
 
-    private final AuthService authService;
+    private final AuthFacade authFacade;
 
-    public AuthController(AuthService authService) {
-        this.authService = authService;
+    public AuthController(AuthFacade authFacade) {
+        this.authFacade = authFacade;
     }
 
     /**
      * POST /register - Register a new user
      */
     @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(
-            @Valid @RequestBody RegisterRequest request,
-            HttpServletResponse response
-    ) {
+    public ResponseEntity<Map<String, String>> register(@Valid @RequestBody RegisterRequest request) {
         log.info("Registration request for email: {}", request.getEmail());
-        AuthResponse authResponse = authService.register(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(authResponse);
+        authFacade.register(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("message", "Inscription réussite"));
     }
 
     /**
@@ -47,7 +47,7 @@ public class AuthController {
             HttpServletResponse response
     ) {
         log.info("Login request for email: {}", request.getEmail());
-        AuthResponse authResponse = authService.login(request, response);
+        AuthResponse authResponse = authFacade.login(request, response);
         return ResponseEntity.ok(authResponse);
     }
 
@@ -55,20 +55,20 @@ public class AuthController {
      * POST /refresh - Refresh access token
      */
     @PostMapping("/refresh")
-    public ResponseEntity<AuthResponse> refresh(
+    public ResponseEntity<RefreshResponse> refresh(
             HttpServletRequest request,
             HttpServletResponse response
     ) {
         log.info("Token refresh request");
-        AuthResponse authResponse = authService.refresh(request, response);
-        return ResponseEntity.ok(authResponse);
+        RefreshResponse refreshResponse = authFacade.refresh(request, response);
+        return ResponseEntity.ok(refreshResponse);
     }
 
     /**
      * POST /logout - Logout user
      */
     @PostMapping("/logout")
-    public ResponseEntity<Void> logout(
+    public ResponseEntity<Map<String, String>> logout(
             @RequestHeader("Authorization") String authorization,
             HttpServletRequest request,
             HttpServletResponse response
@@ -80,7 +80,7 @@ public class AuthController {
             accessToken = authorization.substring(7);
         }
 
-        authService.logout(accessToken, request, response);
-        return ResponseEntity.ok().build();
+        authFacade.logout(accessToken, request, response);
+        return ResponseEntity.ok(Map.of("message", "Déconnexion réussie"));
     }
 }

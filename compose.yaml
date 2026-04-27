@@ -1,13 +1,13 @@
-version: '3.8'
-
 services:
   mysql:
     image: mysql:8.0
     container_name: fitunity-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
-      MYSQL_DATABASE: fitunity_auth
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-fitunity_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fitunity_auth}
+      MYSQL_USER: ${MYSQL_USER:-fitunity}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-fitunity_pass}
     ports:
       - "3306:3306"
     volumes:
@@ -15,7 +15,7 @@ services:
     networks:
       - fitunity-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,6 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: fitunity-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-1234}
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -31,9 +32,29 @@ services:
     networks:
       - fitunity-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD:-1234} ping"]
       interval: 10s
       timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: fitunity-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-fitunity}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-fitunity_pass}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - fitunity-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 30s
+      timeout: 10s
       retries: 5
 
   auth-service:
@@ -45,19 +66,32 @@ services:
     ports:
       - "8081:8081"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/fitunity_auth
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      SPRING_PROFILES_ACTIVE: docker
+      JWT_SECRET: ${JWT_SECRET:-08efa6a9-3d9b-4b18-bd11-0e0f85654d00-4faf5919-1c5f-4782-9f44-cbb4bc48390b}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fitunity_auth}
+      MYSQL_USER: ${MYSQL_USER:-fitunity}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-fitunity_pass}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-1234}
+      RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-fitunity}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-dev_password}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-fitunity_pass}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8081/oauth2/callback/google}
+      OAUTH_FRONTEND_REDIRECT_URI: ${OAUTH_FRONTEND_REDIRECT_URI:-http://localhost:5173/auth/callback}
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/v3/api-docs > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
     networks:
       - fitunity-network
 
@@ -68,3 +102,4 @@ networks:
 volumes:
   mysql-data:
   redis-data:
+  rabbitmq-data:
